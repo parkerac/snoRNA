@@ -1,6 +1,6 @@
 import cyvcf2
 
-vcf_path = "/re_gecip/shared_allGeCIPs/vchundru/DNMs/v2_aggv3/aggv3_dnms_plusDecode_rmSegDupsLCRs.vcf.gz"
+vcf_path = "~/session_data/mounted-data-readonly/aggv3_dnms_plusDecode_rmSegDupsLCRs.vcf.gz"
 
 vcf = cyvcf2.VCF(vcf_path)
 
