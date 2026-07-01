@@ -1,6 +1,6 @@
 import cyvcf2
 
-vcf_path = "~/session_data/mounted-data-readonly/aggv3_dnms_plusDecode_rmSegDupsLCRs.vcf.gz"
+vcf_path = "/home/vscode/session_data/mounted-data-readonly/aggv3_dnms_plusDecode_rmSegDupsLCRs.vcf.gz"
 
 vcf = cyvcf2.VCF(vcf_path)
 
