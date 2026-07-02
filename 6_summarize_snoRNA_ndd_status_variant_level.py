@@ -1,29 +1,20 @@
 #!/usr/bin/env python3
 """
-Summarize snoRNA variant carriers by NDD status with GEL denominators and deCODE separation.
+Create a variant-level NDD status summary for U3, SNORD118, and SNORA70.
 
 This script reads a snoRNA variant TSV or TSV.gz file and a GEL phenotype TSV.
-It categorizes each Aggv3 participant into:
-  - undiagnosed NDD
-  - diagnosed NDD
-  - other
-
-The output table is one row per snoRNA gene / gene_id and includes:
-  - Aggv3 counts by group with GEL denominators in the same columns
+It generates one row per variant for the selected snoRNA genes and reports:
+  - Aggv3 counts by NDD group with GEL denominators
   - deCODE variant carrier counts
 
-Rows are sorted by descending Aggv3 snoRNA carrier frequency.
-
 Usage:
-  python 5_summarize_snoRNA_ndd_status.py \
+  python 6_summarize_snoRNA_ndd_status_variant_level.py \
     --variants variants.tsv.gz \
     --phenotype phenotype.tsv \
     --gtf gencode.v49.annotation.gtf.gz \
-    --out snoRNA_ndd_status_summary.tsv
+    --out snoRNA_variant_level_ndd_status.tsv
 
-If the variant file already contains snoRNA gene annotation columns
-(`snoRNA_gene` and optionally `gene_id`), the script will use those values.
-Otherwise it uses the provided GTF to assign snoRNA genes from variant intervals.
+Only variants overlapping U3, SNORD118, or SNORA70 are included.
 """
 
 import argparse
@@ -33,6 +24,8 @@ import os
 import sys
 from collections import defaultdict
 from bisect import bisect_right
+
+TARGET_GENES = {'U3', 'SNORD118', 'SNORA70'}
 
 
 def open_maybe_gzip(path, mode='rt'):
@@ -161,7 +154,7 @@ def load_phenotypes(phenotype_path, platekey_col='platekey', ndd_col='ndd', case
     return phenotypes, {group: len(pids) for group, pids in totals.items()}
 
 
-def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_path):
+def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
     if not os.path.exists(variants_path):
         raise FileNotFoundError(f'Variants file not found: {variants_path}')
     if not os.path.exists(phenotype_path):
@@ -178,13 +171,11 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
     print('Parsing GTF for snoRNA gene intervals...', file=sys.stderr)
     regions_by_chrom = parse_gtf_for_snoRNA_regions(gtf_path)
 
-    gene_stats = defaultdict(lambda: {
+    row_stats = defaultdict(lambda: {
         'aggv3_undiagnosed': set(),
         'aggv3_diagnosed': set(),
         'aggv3_other': set(),
         'deCODE_participants': set(),
-        'deCODE_variants': set(),
-        'total_aggv3_participants': set(),
     })
 
     with open_maybe_gzip(variants_path, 'rt') as fh:
@@ -201,7 +192,10 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
             gene_name = row.get('snoRNA_gene') or row.get('snoRNA')
             gene_id = row.get('gene_id')
 
-            if not gene_name or not gene_id:
+            matches = []
+            if gene_name and gene_name in TARGET_GENES and gene_id:
+                matches.append((gene_name, gene_id))
+            else:
                 try:
                     chrom = row['chr']
                     start = int(row['start'])
@@ -211,44 +205,30 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
                 if end < start:
                     start, end = end, start
                 overlaps = find_overlapping_snoRNAs(chrom, start, end, regions_by_chrom)
-                if not overlaps:
-                    continue
-                for gene_name, gene_id in overlaps:
-                    summary = gene_stats[(gene_name, gene_id)]
-                    if study.lower() == 'decode':
-                        summary['deCODE_participants'].add(pid)
-                        summary['deCODE_variants'].add(variant_id)
-                    else:
-                        group = phenotypes.get(pid, 'other')
-                        if group == 'diagnosed NDD':
-                            summary['aggv3_diagnosed'].add(pid)
-                        elif group == 'undiagnosed NDD':
-                            summary['aggv3_undiagnosed'].add(pid)
-                        else:
-                            summary['aggv3_other'].add(pid)
-                        summary['total_aggv3_participants'].add(pid)
-            else:
-                if not gene_id:
-                    gene_id = row.get('gene_id', 'UNKNOWN')
-                summary = gene_stats[(gene_name, gene_id)]
+                matches = [(g, gid) for g, gid in overlaps if g in TARGET_GENES]
+
+            if not matches:
+                continue
+
+            for gene_name, gene_id in matches:
+                key = (gene_name, gene_id, variant_id)
                 if study.lower() == 'decode':
-                    summary['deCODE_participants'].add(pid)
-                    summary['deCODE_variants'].add(variant_id)
+                    row_stats[key]['deCODE_participants'].add(pid)
                 else:
                     group = phenotypes.get(pid, 'other')
                     if group == 'diagnosed NDD':
-                        summary['aggv3_diagnosed'].add(pid)
+                        row_stats[key]['aggv3_diagnosed'].add(pid)
                     elif group == 'undiagnosed NDD':
-                        summary['aggv3_undiagnosed'].add(pid)
+                        row_stats[key]['aggv3_undiagnosed'].add(pid)
                     else:
-                        summary['aggv3_other'].add(pid)
-                    summary['total_aggv3_participants'].add(pid)
+                        row_stats[key]['aggv3_other'].add(pid)
 
-    print(f'Writing summary to {out_path}...', file=sys.stderr)
+    print(f'Writing variant-level summary to {out_path}...', file=sys.stderr)
     with open(out_path, 'w', newline='') as out:
         fieldnames = [
             'snoRNA_gene',
             'gene_id',
+            'VariantId',
             'aggv3_undiagnosed_ndd',
             'aggv3_diagnosed_ndd',
             'aggv3_other',
@@ -256,18 +236,19 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
         ]
         writer = csv.DictWriter(out, delimiter='\t', fieldnames=fieldnames)
         writer.writeheader()
-        for (gene_name, gene_id), stats in sorted(
-            gene_stats.items(),
+        for (gene_name, gene_id, variant_id), stats in sorted(
+            row_stats.items(),
             key=lambda x: (
                 len(x[1]['aggv3_undiagnosed']) + len(x[1]['aggv3_diagnosed']) + len(x[1]['aggv3_other']),
                 x[0][0],
-                x[0][1],
+                x[0][2],
             ),
             reverse=True,
         ):
             writer.writerow({
                 'snoRNA_gene': gene_name,
                 'gene_id': gene_id,
+                'VariantId': variant_id,
                 'aggv3_undiagnosed_ndd': f"{len(stats['aggv3_undiagnosed'])}/{phenotype_denominators['undiagnosed NDD']}",
                 'aggv3_diagnosed_ndd': f"{len(stats['aggv3_diagnosed'])}/{phenotype_denominators['diagnosed NDD']}",
                 'aggv3_other': f"{len(stats['aggv3_other'])}/{phenotype_denominators['other']}",
@@ -277,13 +258,13 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Summarize snoRNA NDD status with GEL denominators and deCODE separation')
+    parser = argparse.ArgumentParser(description='Create a variant-level NDD status summary for U3, SNORD118, and SNORA70')
     parser.add_argument('--variants', required=True, help='Input variant TSV or TSV.gz file with ParticipantId, VariantId, chr, start, end, study')
     parser.add_argument('--phenotype', required=True, help='GEL phenotype TSV file with platekey, ndd, and case_solved')
     parser.add_argument('--gtf', required=True, help='GTF file path to identify snoRNA regions when variant annotation is missing')
     parser.add_argument('--out', required=True, help='Output TSV path')
     args = parser.parse_args()
-    summarize_snoRNA_ndd_status(args.variants, args.phenotype, args.gtf, args.out)
+    summarize_variant_level(args.variants, args.phenotype, args.gtf, args.out)
 
 
 if __name__ == '__main__':
