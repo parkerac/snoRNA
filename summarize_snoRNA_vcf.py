@@ -19,11 +19,14 @@ from collections import defaultdict
 from bisect import bisect_right
 
 
-def parse_gtf_for_snoRNA_genes(gtf_path):
-    """Return list of (chrom, start, end, gene_name) for all snoRNA genes.
+def parse_gtf_for_snoRNA_regions(gtf_path):
+    """Parse GTF to extract merged regions for all snoRNA features (any type with gene_type='snoRNA').
+    Returns dict: chrom -> sorted list of (start, end, gene_name).
+    Merges overlapping regions from the same gene.
     Accepts plain or gzipped GTFs.
     """
-    genes = []
+    regions_by_gene = defaultdict(lambda: defaultdict(list))  # gene_name -> chrom -> [(start, end), ...]
+    
     opener = gzip.open if gtf_path.endswith('.gz') else open
     with opener(gtf_path, 'rt') as fh:
         for line in fh:
@@ -33,10 +36,6 @@ def parse_gtf_for_snoRNA_genes(gtf_path):
             if len(parts) < 9:
                 continue
             chrom, src, typ, start, end, score, strand, frame, attrs = parts
-            
-            # Only process gene features
-            if typ != 'gene':
-                continue
             
             # Parse attributes
             attr_dict = {}
@@ -55,22 +54,51 @@ def parse_gtf_for_snoRNA_genes(gtf_path):
             gene_name = attr_dict.get('gene_name', 'UNKNOWN')
             s = int(start)
             e = int(end)
-            genes.append((chrom, s, e, gene_name))
+            regions_by_gene[gene_name][chrom].append((s, e))
     
-    return genes
+    # Merge overlapping regions per gene per chrom
+    result = {}  # chrom -> [(start, end, gene_name), ...]
+    default_dict = defaultdict(list)
+    
+    for gene_name, chroms in regions_by_gene.items():
+        for chrom, intervals in chroms.items():
+            intervals.sort()
+            merged = []
+            cur_s, cur_e = intervals[0]
+            for s, e in intervals[1:]:
+                if s <= cur_e + 1:
+                    cur_e = max(cur_e, e)
+                else:
+                    merged.append((cur_s, cur_e, gene_name))
+                    cur_s, cur_e = s, e
+            merged.append((cur_s, cur_e, gene_name))
+            default_dict[chrom].extend(merged)
+    
+    # Convert to regular dict and sort each chrom
+    for chrom in default_dict:
+        result[chrom] = sorted(default_dict[chrom])
+    
+    return result
 
 
-def find_overlapping_genes(chrom, pos, genes_by_chrom):
-    """Find all snoRNA genes overlapping the given position.
-    genes_by_chrom: dict chrom -> sorted list of (start, end, gene_name)
+def find_overlapping_genes(chrom, pos, regions_by_chrom):
+    """Find all snoRNA genes overlapping the given position using binary search.
+    regions_by_chrom: dict chrom -> sorted list of (start, end, gene_name)
     """
-    if chrom not in genes_by_chrom:
+    if chrom not in regions_by_chrom:
         return []
     
-    gene_list = genes_by_chrom[chrom]
+    region_list = regions_by_chrom[chrom]
     overlapping = []
-    for start, end, gene_name in gene_list:
-        if start <= pos <= end:
+    
+    # Binary search to find candidate regions
+    starts = [s for s, e, g in region_list]
+    idx = bisect_right(starts, pos)
+    
+    # Check the region just before and at idx
+    for i in range(max(0, idx - 1), min(len(region_list), idx + 1)):
+        s, e, gene_name = region_list[i]
+        if s <= pos <= e:
             overlapping.append(gene_name)
     
     return overlapping
@@ -84,36 +112,44 @@ def summarize_vcf(vcf_path, gtf_path, out_path):
         print("Missing dependency: cyvcf2 is required. Install with: python3 -m pip install cyvcf2", file=sys.stderr)
         raise
     
-    # Parse GTF and organize by chrom
-    print("Parsing GTF for snoRNA genes...", file=sys.stderr)
-    genes = parse_gtf_for_snoRNA_genes(gtf_path)
-    genes_by_chrom = defaultdict(list)
+    # Parse GTF for snoRNA regions
+    print("Parsing GTF for snoRNA regions...", file=sys.stderr)
+    regions_by_chrom = parse_gtf_for_snoRNA_regions(gtf_path)
+    
+    # Build gene_info from regions
     gene_info = {}  # gene_name -> (chrom, start, end)
+    seen_genes = set()
+    for chrom, region_list in regions_by_chrom.items():
+        for start, end, gene_name in region_list:
+            if gene_name not in seen_genes:
+                gene_info[gene_name] = (chrom, start, end)
+                seen_genes.add(gene_name)
     
-    for chrom, start, end, gene_name in genes:
-        genes_by_chrom[chrom].append((start, end, gene_name))
-        if gene_name not in gene_info:
-            gene_info[gene_name] = (chrom, start, end)
-    
-    # Sort each chrom's genes by start
-    for chrom in genes_by_chrom:
-        genes_by_chrom[chrom].sort()
+    print(f"Found {len(gene_info)} snoRNA genes in GTF", file=sys.stderr)
     
     # Count variants per gene
     print("Reading VCF and counting variants...", file=sys.stderr)
     variant_counts = defaultdict(set)  # gene_name -> set of variant IDs
     vcf = VCF(vcf_path)
     
+    total_variants = 0
+    matched_variants = 0
+    unmatched_chroms = set()
+    
     for rec in vcf:
+        total_variants += 1
         chrom = rec.CHROM
         pos = rec.POS
         variant_id = f"{chrom}:{pos}_{rec.REF}_{''.join(rec.ALT)}"
         
-        overlapping = find_overlapping_genes(chrom, pos, genes_by_chrom)
+        overlapping = find_overlapping_genes(chrom, pos, regions_by_chrom)
         if not overlapping:
-            # Variant doesn't overlap any snoRNA (shouldn't happen if VCF is filtered)
+            # Variant doesn't overlap any snoRNA region
+            if chrom not in regions_by_chrom:
+                unmatched_chroms.add(chrom)
             continue
         
+        matched_variants += 1
         for gene_name in overlapping:
             variant_counts[gene_name].add(variant_id)
     
@@ -130,8 +166,12 @@ def summarize_vcf(vcf_path, gtf_path, out_path):
             out.write(f"{gene_name}\t{chrom}\t{start}\t{end}\t{count}\n")
     
     print(f"Summary written to {out_path}", file=sys.stderr)
+    print(f"Total variants in VCF: {total_variants}", file=sys.stderr)
+    print(f"Variants matched to snoRNA regions: {matched_variants}", file=sys.stderr)
     print(f"Total snoRNA genes: {len(gene_info)}", file=sys.stderr)
     print(f"Genes with variants: {sum(1 for c in variant_counts.values() if c)}", file=sys.stderr)
+    if unmatched_chroms:
+        print(f"WARNING: Chromosomes in VCF not found in GTF: {sorted(unmatched_chroms)}", file=sys.stderr)
 
 
 def main():
