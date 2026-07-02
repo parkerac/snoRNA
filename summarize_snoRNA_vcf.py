@@ -155,14 +155,21 @@ def summarize_vcf(vcf_path, gtf_path, out_path):
     
     vcf.close()
     
-    # Write output TSV
+    # Write output TSV (only genes with variants, sorted by count descending)
     print("Writing summary...", file=sys.stderr)
     with open(out_path, 'w') as out:
         out.write("gene_name\tchrom\tstart\tend\tunique_variant_count\n")
         
-        for gene_name in sorted(gene_info.keys()):
+        # Filter to only genes with at least one variant and sort by count descending
+        genes_with_variants = [
+            (gene_name, len(variant_counts[gene_name]))
+            for gene_name in gene_info.keys()
+            if len(variant_counts[gene_name]) > 0
+        ]
+        genes_with_variants.sort(key=lambda x: x[1], reverse=True)
+        
+        for gene_name, count in genes_with_variants:
             chrom, start, end = gene_info[gene_name]
-            count = len(variant_counts[gene_name])
             out.write(f"{gene_name}\t{chrom}\t{start}\t{end}\t{count}\n")
     
     print(f"Summary written to {out_path}", file=sys.stderr)
