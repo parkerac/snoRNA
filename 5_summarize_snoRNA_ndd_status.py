@@ -9,9 +9,8 @@ It categorizes each Aggv3 participant into:
   - other
 
 The output table is one row per snoRNA gene / gene_id and includes:
-  - Aggv3 counts by group
+  - Aggv3 counts by group with GEL denominators in the same columns
   - deCODE participant and variant counts
-  - denominators from the phenotype file
 
 Usage:
   python 5_summarize_snoRNA_ndd_status.py \
@@ -248,16 +247,12 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
         fieldnames = [
             'snoRNA_gene',
             'gene_id',
-            'snoRNA_label',
-            'aggv3_undiagnosed_ndd_participants',
-            'aggv3_diagnosed_ndd_participants',
-            'aggv3_other_participants',
+            'aggv3_undiagnosed_ndd',
+            'aggv3_diagnosed_ndd',
+            'aggv3_other',
             'aggv3_total_participants',
             'deCODE_unique_participants',
             'deCODE_unique_variants',
-            'gel_denominator_undiagnosed_ndd',
-            'gel_denominator_diagnosed_ndd',
-            'gel_denominator_other',
         ]
         writer = csv.DictWriter(out, delimiter='\t', fieldnames=fieldnames)
         writer.writeheader()
@@ -265,16 +260,12 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
             writer.writerow({
                 'snoRNA_gene': gene_name,
                 'gene_id': gene_id,
-                'snoRNA_label': f'{gene_name}|{gene_id}',
-                'aggv3_undiagnosed_ndd_participants': len(stats['aggv3_undiagnosed']),
-                'aggv3_diagnosed_ndd_participants': len(stats['aggv3_diagnosed']),
-                'aggv3_other_participants': len(stats['aggv3_other']),
+                'aggv3_undiagnosed_ndd': f"{len(stats['aggv3_undiagnosed'])}/{phenotype_denominators['undiagnosed NDD']}",
+                'aggv3_diagnosed_ndd': f"{len(stats['aggv3_diagnosed'])}/{phenotype_denominators['diagnosed NDD']}",
+                'aggv3_other': f"{len(stats['aggv3_other'])}/{phenotype_denominators['other']}",
                 'aggv3_total_participants': len(stats['total_aggv3_participants']),
                 'deCODE_unique_participants': len(stats['deCODE_participants']),
                 'deCODE_unique_variants': len(stats['deCODE_variants']),
-                'gel_denominator_undiagnosed_ndd': phenotype_denominators['undiagnosed NDD'],
-                'gel_denominator_diagnosed_ndd': phenotype_denominators['diagnosed NDD'],
-                'gel_denominator_other': phenotype_denominators['other'],
             })
     print('Done.', file=sys.stderr)
 
