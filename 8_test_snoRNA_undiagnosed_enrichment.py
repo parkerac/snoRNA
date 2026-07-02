@@ -122,6 +122,33 @@ def fisher_exact(table):
     return odds_ratio, two_sided_p, less_p, greater_p
 
 
+def adjust_pvalues_bonferroni(p_values):
+    n = len(p_values)
+    return [min(p * n, 1.0) for p in p_values]
+
+
+def adjust_pvalues_bh(p_values):
+    n = len(p_values)
+    sorted_indices = sorted(range(n), key=lambda i: p_values[i])
+    adjusted = [0.0] * n
+    prev_adj = 1.0
+    for rank, idx in enumerate(sorted_indices, start=1):
+        adj = p_values[idx] * n / rank
+        prev_adj = min(prev_adj, adj)
+        adjusted[idx] = min(prev_adj, 1.0)
+    return adjusted
+
+
+def adjust_pvalues(p_values, method):
+    if method == 'none':
+        return [min(p, 1.0) for p in p_values]
+    if method == 'bonferroni':
+        return adjust_pvalues_bonferroni(p_values)
+    if method == 'bh':
+        return adjust_pvalues_bh(p_values)
+    raise ValueError(f'Unknown p-value adjustment method: {method}')
+
+
 def build_carrier_sets(variants_path, phenotypes, exclude_studies=None):
     if exclude_studies is None:
         exclude_studies = set()
@@ -177,7 +204,7 @@ def write_enrichment_results(out_path, rows, fieldnames):
             writer.writerow(row)
 
 
-def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, control_group, exclude_studies, analysis_mode, min_carriers):
+def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, control_group, exclude_studies, analysis_mode, min_carriers, p_adjust_method, alpha):
     phenotypes, phenotype_totals = load_phenotypes(phenotype_path)
     if case_group not in phenotype_totals:
         raise ValueError(f'Case group {case_group} not found in phenotype data')
@@ -212,6 +239,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
         'case_noncarriers',
         'control_noncarriers',
         'odds_ratio',
+        'p_value',
+        'p_value_adjusted',
+        'p_adjust_method',
         'fisher_p_two_sided',
         'fisher_p_less',
         'fisher_p_greater',
@@ -245,6 +275,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
         'case_noncarriers': case_noncarriers,
         'control_noncarriers': control_noncarriers,
         'odds_ratio': overall_odds_ratio,
+        'p_value': overall_p_two_sided,
+        'p_value_adjusted': overall_p_two_sided,
+        'p_adjust_method': '',
         'fisher_p_two_sided': overall_p_two_sided,
         'fisher_p_less': overall_p_less,
         'fisher_p_greater': overall_p_greater,
@@ -262,6 +295,7 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
             case_noncarriers = len(case_participants) - case_carriers
             control_noncarriers = len(control_participants) - control_carriers
             odds_ratio, p_two_sided, p_less, p_greater = fisher_exact([[case_carriers, case_noncarriers], [control_carriers, control_noncarriers]])
+            p_raw = p_two_sided
             out_rows.append({
                 'analysis_level': 'gene',
                 'snoRNA_gene': gene_name,
@@ -278,6 +312,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
                 'case_noncarriers': case_noncarriers,
                 'control_noncarriers': control_noncarriers,
                 'odds_ratio': odds_ratio,
+                'p_value': p_raw,
+                'p_value_adjusted': p_raw,
+                'p_adjust_method': p_adjust_method,
                 'fisher_p_two_sided': p_two_sided,
                 'fisher_p_less': p_less,
                 'fisher_p_greater': p_greater,
@@ -298,6 +335,7 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
             case_noncarriers = len(case_participants) - case_carriers
             control_noncarriers = len(control_participants) - control_carriers
             odds_ratio, p_two_sided, p_less, p_greater = fisher_exact([[case_carriers, case_noncarriers], [control_carriers, control_noncarriers]])
+            p_raw = p_two_sided
             out_rows.append({
                 'analysis_level': 'variant',
                 'snoRNA_gene': gene_name,
@@ -314,12 +352,29 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
                 'case_noncarriers': case_noncarriers,
                 'control_noncarriers': control_noncarriers,
                 'odds_ratio': odds_ratio,
+                'p_value': p_raw,
+                'p_value_adjusted': p_raw,
+                'p_adjust_method': p_adjust_method,
                 'fisher_p_two_sided': p_two_sided,
                 'fisher_p_less': p_less,
                 'fisher_p_greater': p_greater,
             })
 
-    write_enrichment_results(out_path, out_rows, fieldnames)
+    if p_adjust_method not in {'none', 'bonferroni', 'bh'}:
+        raise ValueError(f'Unknown p-value adjustment method: {p_adjust_method}')
+
+    indices_to_adjust = [idx for idx, row in enumerate(out_rows) if row['analysis_level'] != 'overall']
+    adjusted_pvalues = adjust_pvalues([out_rows[idx]['p_value'] for idx in indices_to_adjust], p_adjust_method)
+    for idx, adj in zip(indices_to_adjust, adjusted_pvalues):
+        out_rows[idx]['p_value_adjusted'] = adj
+
+    filtered_rows = []
+    for row in out_rows:
+        threshold = row['p_value'] if row['analysis_level'] == 'overall' else row['p_value_adjusted']
+        if threshold <= alpha:
+            filtered_rows.append(row)
+
+    write_enrichment_results(out_path, filtered_rows, fieldnames)
 
 
 def main():
@@ -332,6 +387,8 @@ def main():
     parser.add_argument('--exclude-studies', default='decode', help='Comma-separated study values to exclude from carrier counts')
     parser.add_argument('--analysis-mode', default='both', choices=['gene', 'variant', 'both'], help='Run gene-level, variant-level, or both enrichment tests')
     parser.add_argument('--min-carriers', type=int, default=1, help='Minimum total carriers for a feature to be reported')
+    parser.add_argument('--p-adjust', default='bh', choices=['none', 'bonferroni', 'bh'], help='Multiple testing correction method')
+    parser.add_argument('--alpha', type=float, default=0.05, help='Significance threshold after multiple testing correction')
     args = parser.parse_args()
 
     exclude_studies = {s.strip().lower() for s in args.exclude_studies.split(',') if s.strip()}
@@ -344,6 +401,8 @@ def main():
         exclude_studies,
         args.analysis_mode,
         args.min_carriers,
+        args.p_adjust,
+        args.alpha,
     )
 
 
