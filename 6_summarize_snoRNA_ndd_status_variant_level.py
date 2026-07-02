@@ -21,6 +21,7 @@ import argparse
 import csv
 import gzip
 import os
+import re
 import sys
 from collections import defaultdict
 from bisect import bisect_right
@@ -181,6 +182,16 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
         'end': None,
     })
 
+    def natural_variant_key(variant_id):
+        parts = re.split(r'(\d+)', variant_id)
+        key = []
+        for part in parts:
+            if part.isdigit():
+                key.append(int(part))
+            else:
+                key.append(part)
+        return tuple(key)
+
     with open_maybe_gzip(variants_path, 'rt') as fh:
         reader = csv.DictReader(fh, delimiter='\t')
         required = {'ParticipantId', 'VariantId', 'chr', 'start', 'end', 'study'}
@@ -256,7 +267,7 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
         def sort_key(item):
             (gene_name, gene_id, variant_id), stats = item
             gene_total = gene_totals[gene_name]
-            return (-gene_total, gene_name, variant_id)
+            return (-gene_total, gene_name, natural_variant_key(variant_id))
 
         for (gene_name, gene_id, variant_id), stats in sorted(row_stats.items(), key=sort_key):
             writer.writerow({
