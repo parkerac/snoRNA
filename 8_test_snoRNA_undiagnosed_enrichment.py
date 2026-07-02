@@ -234,17 +234,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
         'control_participants',
         'case_carriers',
         'control_carriers',
-        'case_carrier_freq',
-        'control_carrier_freq',
-        'case_noncarriers',
-        'control_noncarriers',
         'odds_ratio',
         'p_value',
         'p_value_adjusted',
-        'p_adjust_method',
-        'fisher_p_two_sided',
-        'fisher_p_less',
-        'fisher_p_greater',
     ]
 
     total_case_carriers = sum(
@@ -270,17 +262,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
         'control_participants': len(control_participants),
         'case_carriers': total_case_carriers,
         'control_carriers': total_control_carriers,
-        'case_carrier_freq': f'{total_case_carriers}/{len(case_participants)}',
-        'control_carrier_freq': f'{total_control_carriers}/{len(control_participants)}',
-        'case_noncarriers': case_noncarriers,
-        'control_noncarriers': control_noncarriers,
         'odds_ratio': overall_odds_ratio,
         'p_value': overall_p_two_sided,
         'p_value_adjusted': overall_p_two_sided,
-        'p_adjust_method': '',
-        'fisher_p_two_sided': overall_p_two_sided,
-        'fisher_p_less': overall_p_less,
-        'fisher_p_greater': overall_p_greater,
     })
 
     if analysis_mode in {'gene', 'both'}:
@@ -307,17 +291,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
                 'control_participants': len(control_participants),
                 'case_carriers': case_carriers,
                 'control_carriers': control_carriers,
-                'case_carrier_freq': f'{case_carriers}/{len(case_participants)}',
-                'control_carrier_freq': f'{control_carriers}/{len(control_participants)}',
-                'case_noncarriers': case_noncarriers,
-                'control_noncarriers': control_noncarriers,
                 'odds_ratio': odds_ratio,
                 'p_value': p_raw,
                 'p_value_adjusted': p_raw,
-                'p_adjust_method': p_adjust_method,
-                'fisher_p_two_sided': p_two_sided,
-                'fisher_p_less': p_less,
-                'fisher_p_greater': p_greater,
             })
 
     if analysis_mode in {'variant', 'both'}:
@@ -347,17 +323,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
                 'control_participants': len(control_participants),
                 'case_carriers': case_carriers,
                 'control_carriers': control_carriers,
-                'case_carrier_freq': f'{case_carriers}/{len(case_participants)}',
-                'control_carrier_freq': f'{control_carriers}/{len(control_participants)}',
-                'case_noncarriers': case_noncarriers,
-                'control_noncarriers': control_noncarriers,
                 'odds_ratio': odds_ratio,
                 'p_value': p_raw,
                 'p_value_adjusted': p_raw,
-                'p_adjust_method': p_adjust_method,
-                'fisher_p_two_sided': p_two_sided,
-                'fisher_p_less': p_less,
-                'fisher_p_greater': p_greater,
             })
 
     if p_adjust_method not in {'none', 'bonferroni', 'bh'}:

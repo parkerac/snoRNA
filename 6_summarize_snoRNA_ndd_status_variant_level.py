@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Create a variant-level NDD status summary for U3, SNORD118, and SNORA70.
+Create a variant-level NDD status summary for all snoRNA variants.
 
 This script reads a snoRNA variant TSV or TSV.gz file and a GEL phenotype TSV.
-It generates one row per variant for the selected snoRNA genes and reports:
+It generates one row per variant for all snoRNA genes and reports:
   - Aggv3 counts by NDD group with GEL denominators
   - deCODE variant carrier counts
 
@@ -14,7 +14,7 @@ Usage:
     --gtf gencode.v49.annotation.gtf.gz \
     --out snoRNA_variant_level_ndd_status.tsv
 
-Only variants overlapping U3, SNORD118, or SNORA70 are included.
+All snoRNA variants are included.
 """
 
 import argparse
@@ -25,8 +25,6 @@ import re
 import sys
 from collections import defaultdict
 from bisect import bisect_right
-
-TARGET_GENES = {'U3', 'SNORD118', 'SNORA70'}
 
 
 def open_maybe_gzip(path, mode='rt'):
@@ -207,9 +205,9 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
             gene_id = row.get('gene_id')
 
             matches = []
-            if gene_name and gene_name in TARGET_GENES and gene_id:
+            if gene_name and gene_id:
                 matches.append((gene_name, gene_id))
-            else:
+            elif not gene_name or not gene_id:
                 try:
                     chrom = row['chr']
                     start = int(row['start'])
@@ -219,7 +217,7 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
                 if end < start:
                     start, end = end, start
                 overlaps = find_overlapping_snoRNAs(chrom, start, end, regions_by_chrom)
-                matches = [(g, gid) for g, gid in overlaps if g in TARGET_GENES]
+                matches = overlaps
 
             if not matches:
                 continue
