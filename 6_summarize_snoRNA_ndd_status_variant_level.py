@@ -256,9 +256,7 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
         def sort_key(item):
             (gene_name, gene_id, variant_id), stats = item
             gene_total = gene_totals[gene_name]
-            start = stats.get('start') if stats.get('start') is not None else float('inf')
-            end = stats.get('end') if stats.get('end') is not None else float('inf')
-            return (-gene_total, gene_name, gene_id, start, end, variant_id)
+            return (-gene_total, gene_name, variant_id)
 
         for (gene_name, gene_id, variant_id), stats in sorted(row_stats.items(), key=sort_key):
             writer.writerow({

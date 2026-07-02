@@ -258,12 +258,7 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
         writer.writeheader()
         for (gene_name, gene_id), stats in sorted(
             gene_stats.items(),
-            key=lambda x: (
-                len(x[1]['aggv3_undiagnosed']) + len(x[1]['aggv3_diagnosed']) + len(x[1]['aggv3_other']),
-                x[0][0],
-                x[0][1],
-            ),
-            reverse=True,
+            key=lambda x: (x[0][0], x[0][1]),
         ):
             writer.writerow({
                 'snoRNA_gene': gene_name,
