@@ -249,13 +249,13 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
         writer.writeheader()
         gene_totals = defaultdict(int)
         for (gene_name, gene_id, variant_id), stats in row_stats.items():
-            gene_totals[(gene_name, gene_id)] += (
+            gene_totals[gene_name] += (
                 len(stats['aggv3_undiagnosed']) + len(stats['aggv3_diagnosed']) + len(stats['aggv3_other'])
             )
 
         def sort_key(item):
             (gene_name, gene_id, variant_id), stats = item
-            gene_total = gene_totals[(gene_name, gene_id)]
+            gene_total = gene_totals[gene_name]
             start = stats.get('start') if stats.get('start') is not None else float('inf')
             end = stats.get('end') if stats.get('end') is not None else float('inf')
             return (-gene_total, gene_name, gene_id, start, end, variant_id)
