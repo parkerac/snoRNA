@@ -10,7 +10,7 @@ It categorizes each Aggv3 participant into:
 
 The output table is one row per snoRNA gene / gene_id and includes:
   - Aggv3 counts by group with GEL denominators in the same columns
-  - deCODE participant and variant counts
+  - deCODE variant carrier counts
 
 Usage:
   python 5_summarize_snoRNA_ndd_status.py \
@@ -250,9 +250,7 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
             'aggv3_undiagnosed_ndd',
             'aggv3_diagnosed_ndd',
             'aggv3_other',
-            'aggv3_total_participants',
-            'deCODE_unique_participants',
-            'deCODE_unique_variants',
+            'deCODE_variant_carriers',
         ]
         writer = csv.DictWriter(out, delimiter='\t', fieldnames=fieldnames)
         writer.writeheader()
@@ -263,9 +261,7 @@ def summarize_snoRNA_ndd_status(variants_path, phenotype_path, gtf_path, out_pat
                 'aggv3_undiagnosed_ndd': f"{len(stats['aggv3_undiagnosed'])}/{phenotype_denominators['undiagnosed NDD']}",
                 'aggv3_diagnosed_ndd': f"{len(stats['aggv3_diagnosed'])}/{phenotype_denominators['diagnosed NDD']}",
                 'aggv3_other': f"{len(stats['aggv3_other'])}/{phenotype_denominators['other']}",
-                'aggv3_total_participants': len(stats['total_aggv3_participants']),
-                'deCODE_unique_participants': len(stats['deCODE_participants']),
-                'deCODE_unique_variants': len(stats['deCODE_variants']),
+                'deCODE_variant_carriers': len(stats['deCODE_participants']),
             })
     print('Done.', file=sys.stderr)
 
