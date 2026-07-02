@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
-Render snoRNA NDD status tables as human-readable PDFs.
+Render snoRNA NDD status tables as human-readable PDFs or PNGs.
 
-This script reads one or more TSV summary files and writes a PDF report for each.
-It uses reportlab to create styled, wrapped table output suitable for review.
+This script reads one or more TSV summary files and writes a report image for each.
+It uses reportlab for PDF output and matplotlib for PNG output.
 
 Usage:
   python 7_render_snoRNA_ndd_status_pdfs.py \
-    --tsv gene_summary.tsv --out gene_summary.pdf \
-    --tsv variant_summary.tsv --out variant_summary.pdf
+    --tsv gene_summary.tsv --out gene_summary.png --format png \
+    --tsv variant_summary.tsv --out variant_summary.png --format png
 
-If --out is omitted for a TSV file, the PDF name is inferred by replacing the
-.tsv/.tsv.gz suffix with .pdf.
+If --out is omitted for a TSV file, the output name is inferred by replacing the
+.tsv/.tsv.gz suffix with .pdf or .png depending on --format.
 """
 
 import argparse
 import csv
 import os
 import sys
+import textwrap
+
+import matplotlib.pyplot as plt
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
@@ -29,13 +32,14 @@ PDF_PAGE_SIZE = landscape(A4)
 MARGIN = 2 * cm
 
 
-def infer_output_path(tsv_path):
+def infer_output_path(tsv_path, fmt='pdf'):
     base = os.path.basename(tsv_path)
     if base.endswith('.tsv.gz'):
         base = base[:-7]
     elif base.endswith('.tsv'):
         base = base[:-4]
-    return f'{base}.pdf'
+    suffix = '.png' if fmt == 'png' else '.pdf'
+    return f'{base}{suffix}'
 
 
 def read_tsv(tsv_path):
@@ -53,6 +57,47 @@ def make_paragraph(text, style):
     if text is None:
         text = ''
     return Paragraph(str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'), style)
+
+
+def wrap_text(text, width=20):
+    if text is None:
+        return ''
+    return '\n'.join(textwrap.wrap(str(text), width=width))
+
+
+def build_png(tsv_path, out_path):
+    headers, rows = read_tsv(tsv_path)
+    title = os.path.basename(tsv_path).replace('.tsv.gz', '').replace('.tsv', '')
+    wrapped_headers = [wrap_text(col, width=18) for col in headers]
+    cell_text = []
+    for row in rows:
+        cell_text.append([wrap_text(row.get(col, ''), width=18) for col in headers])
+
+    num_rows = len(cell_text) + 1
+    num_cols = len(headers)
+    fig_width = max(10, num_cols * 1.5)
+    fig_height = max(6, min(50, num_rows * 0.35 + 2))
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=150)
+    ax.axis('off')
+
+    table = ax.table(
+        cellText=cell_text,
+        colLabels=wrapped_headers,
+        cellLoc='left',
+        loc='center',
+        colColours=['#d9d9d9'] * num_cols,
+        edges='closed',
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.2)
+
+    plt.title(f'Summary Report: {title}', fontsize=14, pad=20)
+    plt.subplots_adjust(left=0.01, right=0.99, top=0.92, bottom=0.02)
+    fig.savefig(out_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f'Wrote PNG: {out_path}', file=sys.stderr)
 
 
 def build_pdf(tsv_path, out_path):
@@ -113,18 +158,34 @@ def build_pdf(tsv_path, out_path):
     print(f'Wrote PDF: {out_path}', file=sys.stderr)
 
 
+def build_report(tsv_path, out_path, fmt='pdf'):
+    if fmt == 'png':
+        build_png(tsv_path, out_path)
+    else:
+        build_pdf(tsv_path, out_path)
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Render snoRNA summary TSV files as human-readable PDFs')
+    parser = argparse.ArgumentParser(description='Render snoRNA summary TSV files as human-readable PDF or PNG reports')
     parser.add_argument('--tsv', required=True, action='append', help='Input TSV summary file')
-    parser.add_argument('--out', action='append', help='Optional output PDF path; if omitted, inferred from TSV path')
+    parser.add_argument('--out', action='append', help='Optional output path; if omitted, inferred from TSV path and format')
+    parser.add_argument('--format', choices=['pdf', 'png'], default=None, help='Optional output format; will be inferred from output path if omitted')
     args = parser.parse_args()
 
     if args.out and len(args.out) != len(args.tsv):
         parser.error('If --out is provided, it must be given once per --tsv file')
 
-    out_paths = args.out or [infer_output_path(tsv) for tsv in args.tsv]
+    out_paths = []
+    for tsv_path, out_path in zip(args.tsv, args.out or [None] * len(args.tsv)):
+        if out_path:
+            out_paths.append(out_path)
+        else:
+            fmt = args.format or 'pdf'
+            out_paths.append(infer_output_path(tsv_path, fmt=fmt))
+
     for tsv_path, out_path in zip(args.tsv, out_paths):
-        build_pdf(tsv_path, out_path)
+        fmt = args.format or ('png' if out_path.lower().endswith('.png') else 'pdf')
+        build_report(tsv_path, out_path, fmt=fmt)
 
 
 if __name__ == '__main__':
