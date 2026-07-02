@@ -176,6 +176,9 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
         'aggv3_diagnosed': set(),
         'aggv3_other': set(),
         'deCODE_participants': set(),
+        'chrom': None,
+        'start': None,
+        'end': None,
     })
 
     with open_maybe_gzip(variants_path, 'rt') as fh:
@@ -212,6 +215,14 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
 
             for gene_name, gene_id in matches:
                 key = (gene_name, gene_id, variant_id)
+                if row_stats[key]['chrom'] is None:
+                    row_stats[key]['chrom'] = row.get('chr')
+                    try:
+                        row_stats[key]['start'] = int(row['start'])
+                        row_stats[key]['end'] = int(row['end'])
+                    except Exception:
+                        row_stats[key]['start'] = None
+                        row_stats[key]['end'] = None
                 if study.lower() == 'decode':
                     row_stats[key]['deCODE_participants'].add(pid)
                 else:
@@ -236,15 +247,20 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
         ]
         writer = csv.DictWriter(out, delimiter='\t', fieldnames=fieldnames)
         writer.writeheader()
-        for (gene_name, gene_id, variant_id), stats in sorted(
-            row_stats.items(),
-            key=lambda x: (
-                len(x[1]['aggv3_undiagnosed']) + len(x[1]['aggv3_diagnosed']) + len(x[1]['aggv3_other']),
-                x[0][0],
-                x[0][2],
-            ),
-            reverse=True,
-        ):
+        gene_totals = defaultdict(int)
+        for (gene_name, gene_id, variant_id), stats in row_stats.items():
+            gene_totals[(gene_name, gene_id)] += (
+                len(stats['aggv3_undiagnosed']) + len(stats['aggv3_diagnosed']) + len(stats['aggv3_other'])
+            )
+
+        def sort_key(item):
+            (gene_name, gene_id, variant_id), stats = item
+            gene_total = gene_totals[(gene_name, gene_id)]
+            start = stats.get('start') if stats.get('start') is not None else float('inf')
+            end = stats.get('end') if stats.get('end') is not None else float('inf')
+            return (-gene_total, gene_name, gene_id, start, end, variant_id)
+
+        for (gene_name, gene_id, variant_id), stats in sorted(row_stats.items(), key=sort_key):
             writer.writerow({
                 'snoRNA_gene': gene_name,
                 'gene_id': gene_id,
