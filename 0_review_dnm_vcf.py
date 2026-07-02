@@ -12,86 +12,20 @@ This script requires `cyvcf2` to read/write VCFs. Install with:
 """
 
 import argparse
-import gzip
 import os
 import sys
-from bisect import bisect_right
 
-
-def parse_gtf_for_feature(gtf_path, feature_type="snoRNA"):
-    """Return dict chrom -> merged list of (start,end) intervals (1-based inclusive)
-    for gene entries whose gene_type (attribute) equals feature_type.
-    Accepts plain or gzipped GTFs.
-    """
-    regions = {}
-    opener = gzip.open if gtf_path.endswith('.gz') else open
-    with opener(gtf_path, 'rt') as fh:
-        for line in fh:
-            if line.startswith('#'):
-                continue
-            parts = line.rstrip('\n').split('\t')
-            if len(parts) < 9:
-                continue
-            chrom, src, typ, start, end, score, strand, frame, attrs = parts
-            # we care about gene lines (or any line) that carry gene_type
-            attr_dict = {}
-            for kv in attrs.split(';'):
-                kv = kv.strip()
-                if not kv:
-                    continue
-                if ' ' in kv:
-                    k, v = kv.split(' ', 1)
-                    v = v.strip().strip('"')
-                    attr_dict[k] = v
-            gene_type = attr_dict.get('gene_type') or attr_dict.get('gene_biotype')
-            if gene_type != feature_type:
-                continue
-            s = int(start)
-            e = int(end)
-            regions.setdefault(chrom, []).append((s, e))
-
-    # merge intervals per chrom
-    merged = {}
-    for chrom, ivs in regions.items():
-        ivs.sort()
-        out = []
-        cur_s, cur_e = ivs[0]
-        for s, e in ivs[1:]:
-            if s <= cur_e + 1:
-                cur_e = max(cur_e, e)
-            else:
-                out.append((cur_s, cur_e))
-                cur_s, cur_e = s, e
-        out.append((cur_s, cur_e))
-        merged[chrom] = out
-    return merged
-
-
-def pos_overlaps_intervals(pos, ivs):
-    """Return True if 1-based position `pos` overlaps any interval in sorted list `ivs`.
-    `ivs` is list of (start,end) sorted by start.
-    Uses binary search on starts.
-    """
-    if not ivs:
-        return False
-    starts = [s for s, e in ivs]
-    i = bisect_right(starts, pos)
-    # candidate interval is at i-1
-    if i:
-        s, e = ivs[i - 1]
-        if s <= pos <= e:
-            return True
-    return False
+from snoRNA_utils import find_overlapping_snoRNAs, parse_snoRNA_regions
 
 
 def filter_vcf(vcf_in, vcf_out, gtf_path, feature="snoRNA"):
     try:
         from cyvcf2 import VCF, Writer
-    except Exception as e:
+    except Exception:
         print("Missing dependency: cyvcf2 is required. Install with: python3 -m pip install cyvcf2", file=sys.stderr)
         raise
 
-    regions = parse_gtf_for_feature(gtf_path, feature_type=feature)
+    regions_by_chrom = parse_snoRNA_regions(gtf_path, feature_type=feature)
     vcf = VCF(vcf_in)
     w = Writer(vcf_out, vcf)
     count_in = 0
@@ -100,7 +34,7 @@ def filter_vcf(vcf_in, vcf_out, gtf_path, feature="snoRNA"):
         count_in += 1
         chrom = rec.CHROM
         pos = rec.POS  # 1-based
-        if pos_overlaps_intervals(pos, regions.get(chrom, [])):
+        if find_overlapping_snoRNAs(chrom, pos, pos, regions_by_chrom):
             w.write_record(rec)
             count_out += 1
     w.close()
@@ -125,4 +59,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

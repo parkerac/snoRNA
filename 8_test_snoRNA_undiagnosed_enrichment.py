@@ -13,75 +13,11 @@ The script uses exact inference to remain robust for sparse and small counts.
 
 import argparse
 import csv
-import gzip
 import math
-import os
-import re
 import sys
 from collections import defaultdict
 
-
-def open_maybe_gzip(path, mode='rt'):
-    if path.endswith('.gz'):
-        return gzip.open(path, mode)
-    return open(path, mode)
-
-
-def normalize_bool(value):
-    if value is None:
-        return None
-    value = str(value).strip().lower()
-    if value in {'true', '1', 'yes', 'y', 't'}:
-        return True
-    if value in {'false', '0', 'no', 'n', 'f'}:
-        return False
-    return None
-
-
-def normalize_case_solved(value):
-    if value is None:
-        return 'unknown'
-    value = str(value).strip().lower()
-    if value in {'yes', 'y'}:
-        return 'yes'
-    if value in {'no', 'n'}:
-        return 'no'
-    if value in {'partially', 'partial'}:
-        return 'partially'
-    if value in {'unknown', ''}:
-        return 'unknown'
-    return value
-
-
-def categorize_ndd_status(ndd_value, case_solved_value):
-    ndd = normalize_bool(ndd_value)
-    solved = normalize_case_solved(case_solved_value)
-    if ndd is True:
-        if solved == 'yes':
-            return 'diagnosed NDD'
-        return 'undiagnosed NDD'
-    return 'other'
-
-
-def load_phenotypes(phenotype_path, platekey_col='platekey', ndd_col='ndd', case_solved_col='case_solved'):
-    if not os.path.exists(phenotype_path):
-        raise FileNotFoundError(f'Phenotype file not found: {phenotype_path}')
-    phenotypes = {}
-    totals = defaultdict(int)
-    with open(phenotype_path, 'r', newline='') as fh:
-        reader = csv.DictReader(fh, delimiter='\t')
-        if platekey_col not in reader.fieldnames:
-            raise ValueError(f'Phenotype file must contain column {platekey_col}')
-        if ndd_col not in reader.fieldnames:
-            raise ValueError(f'Phenotype file must contain column {ndd_col}')
-        if case_solved_col not in reader.fieldnames:
-            raise ValueError(f'Phenotype file must contain column {case_solved_col}')
-        for row in reader:
-            pid = row[platekey_col]
-            group = categorize_ndd_status(row.get(ndd_col), row.get(case_solved_col))
-            phenotypes[pid] = group
-            totals[group] += 1
-    return phenotypes, totals
+from snoRNA_utils import load_ndd_phenotypes, open_maybe_gzip, require_columns
 
 
 def fisher_exact(table):
@@ -156,10 +92,7 @@ def build_carrier_sets(variants_path, phenotypes, exclude_studies=None):
 
     with open_maybe_gzip(variants_path, 'rt') as fh:
         reader = csv.DictReader(fh, delimiter='\t')
-        required = {'ParticipantId', 'VariantId', 'study'}
-        missing = required - set(reader.fieldnames or [])
-        if missing:
-            raise ValueError(f'Variants file must contain columns: {", ".join(sorted(missing))}')
+        require_columns(reader.fieldnames, {'ParticipantId', 'VariantId', 'study'}, 'Variants file')
 
         for row in reader:
             pid = row['ParticipantId']
@@ -205,7 +138,7 @@ def write_enrichment_results(out_path, rows, fieldnames):
 
 
 def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, control_group, exclude_studies, analysis_mode, min_carriers, p_adjust_method, alpha):
-    phenotypes, phenotype_totals = load_phenotypes(phenotype_path)
+    phenotypes, phenotype_totals = load_ndd_phenotypes(phenotype_path)
     if case_group not in phenotype_totals:
         raise ValueError(f'Case group {case_group} not found in phenotype data')
 
@@ -247,7 +180,7 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
     )
     case_noncarriers = len(case_participants) - total_case_carriers
     control_noncarriers = len(control_participants) - total_control_carriers
-    overall_odds_ratio, overall_p_two_sided, overall_p_less, overall_p_greater = fisher_exact([
+    overall_odds_ratio, overall_p_two_sided, _, _ = fisher_exact([
         [total_case_carriers, case_noncarriers],
         [total_control_carriers, control_noncarriers],
     ])
@@ -278,7 +211,7 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
                 continue
             case_noncarriers = len(case_participants) - case_carriers
             control_noncarriers = len(control_participants) - control_carriers
-            odds_ratio, p_two_sided, p_less, p_greater = fisher_exact([[case_carriers, case_noncarriers], [control_carriers, control_noncarriers]])
+            odds_ratio, p_two_sided, _, _ = fisher_exact([[case_carriers, case_noncarriers], [control_carriers, control_noncarriers]])
             p_raw = p_two_sided
             out_rows.append({
                 'analysis_level': 'gene',
@@ -310,7 +243,7 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
                 continue
             case_noncarriers = len(case_participants) - case_carriers
             control_noncarriers = len(control_participants) - control_carriers
-            odds_ratio, p_two_sided, p_less, p_greater = fisher_exact([[case_carriers, case_noncarriers], [control_carriers, control_noncarriers]])
+            odds_ratio, p_two_sided, _, _ = fisher_exact([[case_carriers, case_noncarriers], [control_carriers, control_noncarriers]])
             p_raw = p_two_sided
             out_rows.append({
                 'analysis_level': 'variant',

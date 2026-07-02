@@ -23,6 +23,8 @@ import os
 import sys
 from collections import defaultdict
 
+from snoRNA_utils import require_columns
+
 
 def load_phenotypes(phenotype_path):
     if not os.path.exists(phenotype_path):
@@ -30,10 +32,7 @@ def load_phenotypes(phenotype_path):
     data = defaultdict(set)
     with open(phenotype_path, 'r', newline='') as fh:
         reader = csv.DictReader(fh, delimiter='\t')
-        if 'platekey' not in reader.fieldnames:
-            raise ValueError('Phenotype file must contain column platekey')
-        if 'hpo_terms' not in reader.fieldnames:
-            raise ValueError('Phenotype file must contain column hpo_terms')
+        require_columns(reader.fieldnames, {'platekey', 'hpo_terms'}, 'Phenotype file')
         for row in reader:
             key = row['platekey']
             terms = row.get('hpo_terms', '').strip()
@@ -53,10 +52,7 @@ def merge_variant_phenotype(variant_path, phenotype_path, out_path):
     rows = []
     with open(variant_path, 'r', newline='') as fh:
         reader = csv.DictReader(fh, delimiter='\t')
-        if 'ParticipantId' not in reader.fieldnames:
-            raise ValueError('Variant summary must contain ParticipantId column')
-        if 'VariantId' not in reader.fieldnames:
-            raise ValueError('Variant summary must contain VariantId column')
+        require_columns(reader.fieldnames, {'ParticipantId', 'VariantId'}, 'Variant summary')
         if 'snoRNA_gene' not in reader.fieldnames and 'snoRNA' not in reader.fieldnames:
             raise ValueError('Variant summary must contain snoRNA_gene or snoRNA column')
         for row in reader:
