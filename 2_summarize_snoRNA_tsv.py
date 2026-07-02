@@ -26,9 +26,10 @@ from bisect import bisect_right
 def parse_gtf_for_snoRNA_regions(gtf_path):
     """Parse GTF and return snoRNA regions merged by gene.
 
-    Returns dict chrom -> sorted list of (start, end, gene_name).
+    Returns dict chrom -> sorted list of (start, end, gene_name, gene_id).
     """
     regions_by_gene = defaultdict(lambda: defaultdict(list))
+    gene_ids = {}
     opener = gzip.open if gtf_path.endswith('.gz') else open
     with opener(gtf_path, 'rt') as fh:
         for line in fh:
@@ -49,6 +50,8 @@ def parse_gtf_for_snoRNA_regions(gtf_path):
             if gene_type != 'snoRNA':
                 continue
             gene_name = attr_dict.get('gene_name', 'UNKNOWN')
+            gene_id = attr_dict.get('gene_id', 'UNKNOWN')
+            gene_ids[gene_name] = gene_id
             s = int(start)
             e = int(end)
             regions_by_gene[gene_name][chrom].append((s, e))
@@ -63,9 +66,9 @@ def parse_gtf_for_snoRNA_regions(gtf_path):
                 if s <= cur_e + 1:
                     cur_e = max(cur_e, e)
                 else:
-                    merged.append((cur_s, cur_e, gene_name))
+                    merged.append((cur_s, cur_e, gene_name, gene_ids[gene_name]))
                     cur_s, cur_e = s, e
-            merged.append((cur_s, cur_e, gene_name))
+            merged.append((cur_s, cur_e, gene_name, gene_ids[gene_name]))
             regions_by_chrom[chrom].extend(merged)
 
     for chrom in regions_by_chrom:
@@ -74,19 +77,19 @@ def parse_gtf_for_snoRNA_regions(gtf_path):
 
 
 def find_overlapping_snoRNAs(chrom, start, end, regions_by_chrom):
-    """Return snoRNA gene names overlapping the variant interval."""
+    """Return (snoRNA gene name, gene_id) tuples overlapping the variant interval."""
     if chrom not in regions_by_chrom:
         return []
     regions = regions_by_chrom[chrom]
-    starts = [s for s, e, g in regions]
+    starts = [s for s, e, g, gid in regions]
     idx = bisect_right(starts, end)
     overlapping = []
     # Check previous regions and forward regions while they might overlap
     i = max(0, idx - 1)
     while i < len(regions) and regions[i][0] <= end:
-        s, e, gene_name = regions[i]
+        s, e, gene_name, gene_id = regions[i]
         if s <= end and start <= e:
-            overlapping.append(gene_name)
+            overlapping.append((gene_name, gene_id))
         i += 1
     return overlapping
 
@@ -132,11 +135,12 @@ def summarize_tsv(tsv_path, gtf_path, out_gene_summary, out_variant_summary):
             filtered_rows += 1
             participant_id = row['ParticipantId']
             variant_id = row['VariantId']
-            for gene_name in snoRNA_genes:
+            for gene_name, gene_id in snoRNA_genes:
                 variant_counts[gene_name].add(variant_id)
                 participant_counts[gene_name].add(participant_id)
                 output_row = dict(row)
                 output_row['snoRNA_gene'] = gene_name
+                output_row['gene_id'] = gene_id
                 variant_rows.append(output_row)
 
     print(f"Total rows read: {total_rows}", file=sys.stderr)
@@ -158,7 +162,7 @@ def summarize_tsv(tsv_path, gtf_path, out_gene_summary, out_variant_summary):
 
     print(f"Writing variant-level summary to {out_variant_summary}...", file=sys.stderr)
     with open(out_variant_summary, 'w', newline='') as out:
-        writer = csv.DictWriter(out, delimiter='\t', fieldnames=list(variant_rows[0].keys()) if variant_rows else ['ParticipantId', 'VariantId', 'chr', 'start', 'end', 'ref', 'alt', 'overlap_segdup_lcr', 'study', 'paternal_age', 'maternal_age', 'snoRNA_gene'])
+        writer = csv.DictWriter(out, delimiter='\t', fieldnames=list(variant_rows[0].keys()) if variant_rows else ['ParticipantId', 'VariantId', 'chr', 'start', 'end', 'ref', 'alt', 'overlap_segdup_lcr', 'study', 'paternal_age', 'maternal_age', 'snoRNA_gene', 'gene_id'])
         writer.writeheader()
         for row in variant_rows:
             writer.writerow(row)
