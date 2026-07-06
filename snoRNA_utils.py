@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared helpers for the snoRNA analysis scripts."""
+"""Shared helpers for the small-RNA analysis scripts."""
 
 import csv
 import gzip
@@ -9,6 +9,7 @@ from collections import defaultdict
 
 
 NDD_GROUPS = ('undiagnosed NDD', 'diagnosed NDD', 'other')
+DEFAULT_RNA_CLASSES = ('snoRNA', 'scaRNA')
 
 
 def open_maybe_gzip(path, mode='rt'):
@@ -19,6 +20,14 @@ def require_columns(fieldnames, required, label='Input file'):
     missing = set(required) - set(fieldnames or [])
     if missing:
         raise ValueError(f'{label} must contain columns: {", ".join(sorted(missing))}')
+
+
+def parse_feature_types(feature_types=None):
+    if feature_types is None:
+        return DEFAULT_RNA_CLASSES
+    if isinstance(feature_types, str):
+        feature_types = feature_types.split(',')
+    return tuple(feature.strip() for feature in feature_types if feature and feature.strip())
 
 
 def parse_gtf_attributes(attributes):
@@ -49,13 +58,17 @@ def merge_intervals(intervals):
     return merged
 
 
-def parse_snoRNA_regions(gtf_path, feature_type='snoRNA'):
-    """Return chrom -> sorted (start, end, gene_name, gene_id) snoRNA regions.
+def parse_snoRNA_regions(gtf_path, feature_types=None, feature_type=None):
+    """Return chrom -> sorted (start, end, rna_class, gene_name, gene_id) regions.
 
     Intervals are merged per gene identity, where identity is the pair
-    (gene_name, gene_id). Grouping by gene_id avoids assigning a repeated
-    snoRNA name's gene_id to variants at a different locus.
+    (rna_class, gene_name, gene_id). Grouping by gene_id avoids assigning a
+    repeated RNA name's gene_id to variants at a different locus.
     """
+    if feature_type is not None and feature_types is None:
+        feature_types = feature_type
+    wanted_types = set(parse_feature_types(feature_types))
+
     regions_by_gene = defaultdict(lambda: defaultdict(list))
     with open_maybe_gzip(gtf_path, 'rt') as fh:
         for line in fh:
@@ -68,34 +81,50 @@ def parse_snoRNA_regions(gtf_path, feature_type='snoRNA'):
             chrom, _, _, start, end, _, _, _, attributes = parts[:9]
             attr = parse_gtf_attributes(attributes)
             gene_type = attr.get('gene_type') or attr.get('gene_biotype')
-            if gene_type != feature_type:
+            if gene_type not in wanted_types:
                 continue
 
             gene_name = attr.get('gene_name', 'UNKNOWN')
             gene_id = attr.get('gene_id', 'UNKNOWN')
-            regions_by_gene[(gene_name, gene_id)][chrom].append((int(start), int(end)))
+            regions_by_gene[(gene_type, gene_name, gene_id)][chrom].append((int(start), int(end)))
 
     regions_by_chrom = defaultdict(list)
-    for (gene_name, gene_id), chroms in regions_by_gene.items():
+    for (rna_class, gene_name, gene_id), chroms in regions_by_gene.items():
         for chrom, intervals in chroms.items():
             for start, end in merge_intervals(intervals):
-                regions_by_chrom[chrom].append((start, end, gene_name, gene_id))
+                regions_by_chrom[chrom].append((start, end, rna_class, gene_name, gene_id))
 
     return {chrom: sorted(regions) for chrom, regions in regions_by_chrom.items()}
 
 
 def find_overlapping_snoRNAs(chrom, start, end, regions_by_chrom):
-    """Return (gene_name, gene_id) pairs overlapping a 1-based inclusive interval."""
+    """Return (rna_class, gene_name, gene_id) tuples overlapping a 1-based inclusive interval."""
     if end < start:
         start, end = end, start
 
     matches = []
-    for region_start, region_end, gene_name, gene_id in regions_by_chrom.get(chrom, []):
+    for region_start, region_end, rna_class, gene_name, gene_id in regions_by_chrom.get(chrom, []):
         if region_start > end:
             break
         if start <= region_end:
-            matches.append((gene_name, gene_id))
+            matches.append((rna_class, gene_name, gene_id))
     return matches
+
+
+def get_rna_class(row, default='snoRNA'):
+    return row.get('rna_class') or row.get('feature_type') or row.get('feature') or default
+
+
+def get_rna_gene(row):
+    return row.get('rna_gene') or row.get('snoRNA_gene') or row.get('snoRNA')
+
+
+def get_rna_annotation(row, default_class='snoRNA', require_gene_id=True):
+    gene_name = get_rna_gene(row)
+    gene_id = row.get('gene_id') or row.get('gene')
+    if not gene_name or (require_gene_id and not gene_id):
+        return None
+    return get_rna_class(row, default=default_class), gene_name, gene_id or 'UNKNOWN'
 
 
 def normalize_bool(value):

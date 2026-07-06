@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Test for enrichment of snoRNA variant carriers in undiagnosed NDD cases.
+Test for enrichment of snoRNA/scaRNA variant carriers in undiagnosed NDD cases.
 
-This script reads a snoRNA variant TSV/TSV.gz file and a GEL phenotype TSV.
+This script reads a small-RNA variant TSV/TSV.gz file and a GEL phenotype TSV.
 It counts carrier status by participant and performs Fisher exact tests for:
-  - overall snoRNA carrier enrichment
+  - overall carrier enrichment per RNA class
   - per-gene enrichment
   - per-variant enrichment
 
@@ -17,7 +17,7 @@ import math
 import sys
 from collections import defaultdict
 
-from snoRNA_utils import load_ndd_phenotypes, open_maybe_gzip, require_columns
+from snoRNA_utils import get_rna_annotation, get_rna_class, load_ndd_phenotypes, open_maybe_gzip, require_columns
 
 
 def fisher_exact(table):
@@ -88,7 +88,7 @@ def adjust_pvalues(p_values, method):
 def build_carrier_sets(variants_path, phenotypes, exclude_studies=None):
     if exclude_studies is None:
         exclude_studies = set()
-    participants_with_variants = defaultdict(lambda: {'genes': set(), 'variants': set()})
+    participants_with_variants = defaultdict(lambda: {'classes': set(), 'genes': set(), 'variants': set()})
 
     with open_maybe_gzip(variants_path, 'rt') as fh:
         reader = csv.DictReader(fh, delimiter='\t')
@@ -102,13 +102,15 @@ def build_carrier_sets(variants_path, phenotypes, exclude_studies=None):
             if study in exclude_studies:
                 continue
             variant_id = row['VariantId']
-            gene_name = row.get('snoRNA_gene') or row.get('snoRNA')
-            gene_id = row.get('gene_id') or row.get('gene') or 'UNKNOWN'
-            if gene_name:
-                participants_with_variants[pid]['genes'].add((gene_name, gene_id))
-                participants_with_variants[pid]['variants'].add((gene_name, gene_id, variant_id))
+            annotation = get_rna_annotation(row, require_gene_id=False)
+            rna_class = get_rna_class(row)
+            participants_with_variants[pid]['classes'].add(rna_class)
+            if annotation:
+                rna_class, gene_name, gene_id = annotation
+                participants_with_variants[pid]['genes'].add((rna_class, gene_name, gene_id))
+                participants_with_variants[pid]['variants'].add((rna_class, gene_name, gene_id, variant_id))
             else:
-                participants_with_variants[pid]['variants'].add((None, None, variant_id))
+                participants_with_variants[pid]['variants'].add((rna_class, None, None, variant_id))
     return participants_with_variants
 
 
@@ -118,14 +120,17 @@ def count_carriers(participant_ids, participants_with_variants, feature_type='ge
         carrier_data = participants_with_variants.get(pid)
         if not carrier_data:
             continue
-        if feature_type == 'gene':
+        if feature_type == 'class':
+            for rna_class in carrier_data['classes']:
+                counts[rna_class] += 1
+        elif feature_type == 'gene':
             for gene_key in carrier_data['genes']:
                 counts[gene_key] += 1
         elif feature_type == 'variant':
             for variant_key in carrier_data['variants']:
                 counts[variant_key] += 1
         else:
-            raise ValueError('feature_type must be gene or variant')
+            raise ValueError('feature_type must be class, gene, or variant')
     return counts
 
 
@@ -158,7 +163,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
     out_rows = []
     fieldnames = [
         'analysis_level',
+        'rna_class',
         'snoRNA_gene',
+        'rna_gene',
         'gene_id',
         'VariantId',
         'case_group',
@@ -172,41 +179,43 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
         'p_value_adjusted',
     ]
 
-    total_case_carriers = sum(
-        1 for pid in case_participants if participants_with_variants.get(pid, {}).get('variants')
-    )
-    total_control_carriers = sum(
-        1 for pid in control_participants if participants_with_variants.get(pid, {}).get('variants')
-    )
-    case_noncarriers = len(case_participants) - total_case_carriers
-    control_noncarriers = len(control_participants) - total_control_carriers
-    overall_odds_ratio, overall_p_two_sided, _, _ = fisher_exact([
-        [total_case_carriers, case_noncarriers],
-        [total_control_carriers, control_noncarriers],
-    ])
-    out_rows.append({
-        'analysis_level': 'overall',
-        'snoRNA_gene': '',
-        'gene_id': '',
-        'VariantId': '',
-        'case_group': case_group,
-        'control_group': control_group,
-        'case_participants': len(case_participants),
-        'control_participants': len(control_participants),
-        'case_carriers': total_case_carriers,
-        'control_carriers': total_control_carriers,
-        'odds_ratio': overall_odds_ratio,
-        'p_value': overall_p_two_sided,
-        'p_value_adjusted': overall_p_two_sided,
-    })
+    case_class_counts = count_carriers(case_participants, participants_with_variants, feature_type='class')
+    control_class_counts = count_carriers(control_participants, participants_with_variants, feature_type='class')
+    all_classes = sorted(set(case_class_counts) | set(control_class_counts))
+    for rna_class in all_classes:
+        case_carriers = case_class_counts.get(rna_class, 0)
+        control_carriers = control_class_counts.get(rna_class, 0)
+        case_noncarriers = len(case_participants) - case_carriers
+        control_noncarriers = len(control_participants) - control_carriers
+        overall_odds_ratio, overall_p_two_sided, _, _ = fisher_exact([
+            [case_carriers, case_noncarriers],
+            [control_carriers, control_noncarriers],
+        ])
+        out_rows.append({
+            'analysis_level': 'overall',
+            'rna_class': rna_class,
+            'snoRNA_gene': '',
+            'rna_gene': '',
+            'gene_id': '',
+            'VariantId': '',
+            'case_group': case_group,
+            'control_group': control_group,
+            'case_participants': len(case_participants),
+            'control_participants': len(control_participants),
+            'case_carriers': case_carriers,
+            'control_carriers': control_carriers,
+            'odds_ratio': overall_odds_ratio,
+            'p_value': overall_p_two_sided,
+            'p_value_adjusted': overall_p_two_sided,
+        })
 
     if analysis_mode in {'gene', 'both'}:
         case_gene_counts = count_carriers(case_participants, participants_with_variants, feature_type='gene')
         control_gene_counts = count_carriers(control_participants, participants_with_variants, feature_type='gene')
-        all_gene_keys = sorted(set(case_gene_counts) | set(control_gene_counts), key=lambda x: (x[0] or '', x[1] or ''))
-        for gene_name, gene_id in all_gene_keys:
-            case_carriers = case_gene_counts.get((gene_name, gene_id), 0)
-            control_carriers = control_gene_counts.get((gene_name, gene_id), 0)
+        all_gene_keys = sorted(set(case_gene_counts) | set(control_gene_counts), key=lambda x: (x[0] or '', x[1] or '', x[2] or ''))
+        for rna_class, gene_name, gene_id in all_gene_keys:
+            case_carriers = case_gene_counts.get((rna_class, gene_name, gene_id), 0)
+            control_carriers = control_gene_counts.get((rna_class, gene_name, gene_id), 0)
             if case_carriers + control_carriers < min_carriers:
                 continue
             case_noncarriers = len(case_participants) - case_carriers
@@ -215,7 +224,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
             p_raw = p_two_sided
             out_rows.append({
                 'analysis_level': 'gene',
+                'rna_class': rna_class,
                 'snoRNA_gene': gene_name,
+                'rna_gene': gene_name,
                 'gene_id': gene_id,
                 'VariantId': '',
                 'case_group': case_group,
@@ -234,11 +245,11 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
         control_variant_counts = count_carriers(control_participants, participants_with_variants, feature_type='variant')
         all_variant_keys = sorted(
             set(case_variant_counts) | set(control_variant_counts),
-            key=lambda x: (x[0] or '', x[1] or '', x[2] or ''),
+            key=lambda x: (x[0] or '', x[1] or '', x[2] or '', x[3] or ''),
         )
-        for gene_name, gene_id, variant_id in all_variant_keys:
-            case_carriers = case_variant_counts.get((gene_name, gene_id, variant_id), 0)
-            control_carriers = control_variant_counts.get((gene_name, gene_id, variant_id), 0)
+        for rna_class, gene_name, gene_id, variant_id in all_variant_keys:
+            case_carriers = case_variant_counts.get((rna_class, gene_name, gene_id, variant_id), 0)
+            control_carriers = control_variant_counts.get((rna_class, gene_name, gene_id, variant_id), 0)
             if case_carriers + control_carriers < min_carriers:
                 continue
             case_noncarriers = len(case_participants) - case_carriers
@@ -247,7 +258,9 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
             p_raw = p_two_sided
             out_rows.append({
                 'analysis_level': 'variant',
+                'rna_class': rna_class,
                 'snoRNA_gene': gene_name,
+                'rna_gene': gene_name,
                 'gene_id': gene_id,
                 'VariantId': variant_id,
                 'case_group': case_group,
@@ -279,8 +292,8 @@ def analyze_enrichment(variants_path, phenotype_path, out_path, case_group, cont
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Test snoRNA variant enrichment in undiagnosed NDD cases')
-    parser.add_argument('--variants', required=True, help='Input variant TSV or TSV.gz file with ParticipantId, VariantId, and snoRNA_gene or snoRNA')
+    parser = argparse.ArgumentParser(description='Test snoRNA/scaRNA variant enrichment in undiagnosed NDD cases')
+    parser.add_argument('--variants', required=True, help='Input variant TSV or TSV.gz file with ParticipantId, VariantId, and rna_gene/snoRNA_gene/snoRNA')
     parser.add_argument('--phenotype', required=True, help='GEL phenotype TSV file with platekey, ndd, and case_solved')
     parser.add_argument('--out', required=True, help='Output TSV path for enrichment results')
     parser.add_argument('--case-group', default='undiagnosed NDD', help='Phenotype group to treat as cases')

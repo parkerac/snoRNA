@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Create a variant-level NDD status summary for all snoRNA variants.
+Create a variant-level NDD status summary for all snoRNA/scaRNA variants.
 
-This script reads a snoRNA variant TSV or TSV.gz file and a GEL phenotype TSV.
-It generates one row per variant for all snoRNA genes and reports:
+This script reads a small-RNA variant TSV or TSV.gz file and a GEL phenotype TSV.
+It generates one row per variant for all small-RNA genes and reports:
   - Aggv3 counts by NDD group with GEL denominators
   - deCODE variant carrier counts
 
@@ -14,7 +14,7 @@ Usage:
     --gtf gencode.v49.annotation.gtf.gz \
     --out snoRNA_variant_level_ndd_status.tsv
 
-All snoRNA variants are included.
+All requested small-RNA variants are included.
 """
 
 import argparse
@@ -24,18 +24,21 @@ import sys
 from collections import defaultdict
 
 from snoRNA_utils import (
+    DEFAULT_RNA_CLASSES,
     aggv3_status_key,
     ensure_ndd_denominators,
     find_overlapping_snoRNAs,
+    get_rna_annotation,
     load_ndd_phenotypes,
     natural_key,
     open_maybe_gzip,
+    parse_feature_types,
     parse_snoRNA_regions,
     require_columns,
 )
 
 
-def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
+def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path, feature_types=None):
     if not os.path.exists(variants_path):
         raise FileNotFoundError(f'Variants file not found: {variants_path}')
     if not os.path.exists(phenotype_path):
@@ -47,8 +50,10 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
     phenotypes, phenotype_denominators = load_ndd_phenotypes(phenotype_path)
     ensure_ndd_denominators(phenotype_denominators)
 
-    print('Parsing GTF for snoRNA gene intervals...', file=sys.stderr)
-    regions_by_chrom = parse_snoRNA_regions(gtf_path)
+    feature_types = parse_feature_types(feature_types)
+
+    print('Parsing GTF for small-RNA gene intervals...', file=sys.stderr)
+    regions_by_chrom = parse_snoRNA_regions(gtf_path, feature_types=feature_types)
 
     row_stats = defaultdict(lambda: {
         'aggv3_undiagnosed': set(),
@@ -65,11 +70,10 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
             pid = row['ParticipantId']
             variant_id = row['VariantId']
             study = str(row['study']).strip()
-            gene_name = row.get('snoRNA_gene') or row.get('snoRNA')
-            gene_id = row.get('gene_id')
 
-            if gene_name and gene_id:
-                matches = [(gene_name, gene_id)]
+            annotation = get_rna_annotation(row)
+            if annotation:
+                matches = [annotation]
             else:
                 try:
                     chrom = row['chr']
@@ -82,8 +86,8 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
             if not matches:
                 continue
 
-            for gene_name, gene_id in matches:
-                key = (gene_name, gene_id, variant_id)
+            for rna_class, gene_name, gene_id in matches:
+                key = (rna_class, gene_name, gene_id, variant_id)
                 if study.lower() == 'decode':
                     row_stats[key]['deCODE_participants'].add(pid)
                     continue
@@ -94,7 +98,9 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
     print(f'Writing variant-level summary to {out_path}...', file=sys.stderr)
     with open(out_path, 'w', newline='') as out:
         fieldnames = [
+            'rna_class',
             'snoRNA_gene',
+            'rna_gene',
             'gene_id',
             'VariantId',
             'aggv3_undiagnosed_ndd',
@@ -105,19 +111,21 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
         writer = csv.DictWriter(out, delimiter='\t', fieldnames=fieldnames)
         writer.writeheader()
         gene_totals = defaultdict(int)
-        for (gene_name, _gene_id, _variant_id), stats in row_stats.items():
-            gene_totals[gene_name] += (
+        for (rna_class, gene_name, gene_id, _variant_id), stats in row_stats.items():
+            gene_totals[(rna_class, gene_name, gene_id)] += (
                 len(stats['aggv3_undiagnosed']) + len(stats['aggv3_diagnosed']) + len(stats['aggv3_other'])
             )
 
         def sort_key(item):
-            (gene_name, _gene_id, variant_id), _stats = item
-            gene_total = gene_totals[gene_name]
-            return (-gene_total, gene_name, natural_key(variant_id))
+            (rna_class, gene_name, gene_id, variant_id), _stats = item
+            gene_total = gene_totals[(rna_class, gene_name, gene_id)]
+            return (-gene_total, rna_class, gene_name, gene_id, natural_key(variant_id))
 
-        for (gene_name, gene_id, variant_id), stats in sorted(row_stats.items(), key=sort_key):
+        for (rna_class, gene_name, gene_id, variant_id), stats in sorted(row_stats.items(), key=sort_key):
             writer.writerow({
+                'rna_class': rna_class,
                 'snoRNA_gene': gene_name,
+                'rna_gene': gene_name,
                 'gene_id': gene_id,
                 'VariantId': variant_id,
                 'aggv3_undiagnosed_ndd': f"{len(stats['aggv3_undiagnosed'])}/{phenotype_denominators['undiagnosed NDD']}",
@@ -129,13 +137,14 @@ def summarize_variant_level(variants_path, phenotype_path, gtf_path, out_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Create a variant-level NDD status summary for snoRNA variants')
+    parser = argparse.ArgumentParser(description='Create a variant-level NDD status summary for snoRNA/scaRNA variants')
     parser.add_argument('--variants', required=True, help='Input variant TSV or TSV.gz file with ParticipantId, VariantId, chr, start, end, study')
     parser.add_argument('--phenotype', required=True, help='GEL phenotype TSV file with platekey, ndd, and case_solved')
-    parser.add_argument('--gtf', required=True, help='GTF file path to identify snoRNA regions when variant annotation is missing')
+    parser.add_argument('--gtf', required=True, help='GTF file path to identify small-RNA regions when variant annotation is missing')
+    parser.add_argument('--feature-types', default=','.join(DEFAULT_RNA_CLASSES), help='Comma-separated gene_type values to summarize (default: snoRNA,scaRNA)')
     parser.add_argument('--out', required=True, help='Output TSV path')
     args = parser.parse_args()
-    summarize_variant_level(args.variants, args.phenotype, args.gtf, args.out)
+    summarize_variant_level(args.variants, args.phenotype, args.gtf, args.out, args.feature_types)
 
 
 if __name__ == '__main__':

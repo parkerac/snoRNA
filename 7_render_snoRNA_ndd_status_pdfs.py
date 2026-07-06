@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Render snoRNA NDD status tables as human-readable PDFs or PNGs.
+Render small-RNA NDD status tables as human-readable PDFs or PNGs.
 
 This script reads one or more TSV summary files and writes a report image for each.
 It uses reportlab for PDF output and matplotlib for PNG output.
@@ -166,7 +166,7 @@ def build_report(tsv_path, out_path, fmt='pdf'):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Render snoRNA summary TSV files as human-readable PDF or PNG reports')
+    parser = argparse.ArgumentParser(description='Render small-RNA summary TSV files as human-readable PDF or PNG reports')
     parser.add_argument('--tsv', required=True, action='append', help='Input TSV summary file')
     parser.add_argument('--out', action='append', help='Optional output path; if omitted, inferred from TSV path and format')
     parser.add_argument('--format', choices=['pdf', 'png'], default=None, help='Optional output format; will be inferred from output path if omitted')

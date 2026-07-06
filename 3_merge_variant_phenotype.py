@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Merge snoRNA variant summary with phenotype data by participant ID.
+Merge small-RNA variant summary with phenotype data by participant ID.
 
 Input:
-  - variant summary TSV with ParticipantId, VariantId, and snoRNA_gene
+  - variant summary TSV with ParticipantId, VariantId, and rna_gene/snoRNA_gene
   - phenotype TSV with platekey and hpo_terms
 
 Output:
-  - TSV with columns: snoRNA, VariantId, ParticipantId, hpo_terms
-  - sorted by snoRNA then VariantId
+  - TSV with columns: rna_class, rna_gene, snoRNA, VariantId, ParticipantId, hpo_terms
+  - sorted by RNA class, RNA gene, then VariantId
 
 Usage:
   python 3_merge_variant_phenotype.py \
@@ -23,7 +23,7 @@ import os
 import sys
 from collections import defaultdict
 
-from snoRNA_utils import require_columns
+from snoRNA_utils import get_rna_class, get_rna_gene, require_columns
 
 
 def load_phenotypes(phenotype_path):
@@ -53,24 +53,27 @@ def merge_variant_phenotype(variant_path, phenotype_path, out_path):
     with open(variant_path, 'r', newline='') as fh:
         reader = csv.DictReader(fh, delimiter='\t')
         require_columns(reader.fieldnames, {'ParticipantId', 'VariantId'}, 'Variant summary')
-        if 'snoRNA_gene' not in reader.fieldnames and 'snoRNA' not in reader.fieldnames:
-            raise ValueError('Variant summary must contain snoRNA_gene or snoRNA column')
+        if not {'rna_gene', 'snoRNA_gene', 'snoRNA'} & set(reader.fieldnames or []):
+            raise ValueError('Variant summary must contain rna_gene, snoRNA_gene, or snoRNA column')
         for row in reader:
             participant_id = row['ParticipantId']
             variant_id = row['VariantId']
-            snoRNA = row.get('snoRNA_gene') or row.get('snoRNA')
+            rna_class = get_rna_class(row)
+            rna_gene = get_rna_gene(row)
             hpo_terms = phenotypes.get(participant_id, '')
             rows.append({
-                'snoRNA': snoRNA,
+                'rna_class': rna_class,
+                'rna_gene': rna_gene,
+                'snoRNA': rna_gene,
                 'VariantId': variant_id,
                 'ParticipantId': participant_id,
                 'hpo_terms': hpo_terms,
             })
 
-    rows.sort(key=lambda x: (x['snoRNA'] or '', x['VariantId'] or ''))
+    rows.sort(key=lambda x: (x['rna_class'] or '', x['rna_gene'] or '', x['VariantId'] or ''))
 
     with open(out_path, 'w', newline='') as out:
-        fieldnames = ['snoRNA', 'VariantId', 'ParticipantId', 'hpo_terms']
+        fieldnames = ['rna_class', 'rna_gene', 'snoRNA', 'VariantId', 'ParticipantId', 'hpo_terms']
         writer = csv.DictWriter(out, delimiter='\t', fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
@@ -81,8 +84,8 @@ def merge_variant_phenotype(variant_path, phenotype_path, out_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Merge snoRNA variant summary with phenotype data')
-    parser.add_argument('--variant-summary', required=True, help='TSV variant summary file with ParticipantId, VariantId, and snoRNA_gene or snoRNA')
+    parser = argparse.ArgumentParser(description='Merge small-RNA variant summary with phenotype data')
+    parser.add_argument('--variant-summary', required=True, help='TSV variant summary file with ParticipantId, VariantId, and rna_gene/snoRNA_gene/snoRNA')
     parser.add_argument('--phenotype', required=True, help='TSV file with platekey and hpo_terms')
     parser.add_argument('--out', required=True, help='Output TSV path')
     args = parser.parse_args()

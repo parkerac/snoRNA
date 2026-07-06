@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Plot a heatmap of HPO term vs snoRNA showing the number of unique participants.
+Plot a heatmap of HPO term vs small-RNA gene showing the number of unique participants.
 
 Input:
-  - merged variant-phenotype TSV with columns: snoRNA, VariantId, ParticipantId, hpo_terms
+  - merged variant-phenotype TSV with columns: rna_gene/snoRNA, VariantId, ParticipantId, hpo_terms
     where `hpo_terms` is a comma-separated list of HPO terms per participant.
 
 Output:
   - heatmap image (PNG)
-  - optional TSV matrix with counts (HPO_term x snoRNA)
+  - optional TSV matrix with counts (HPO_term x small-RNA label)
 
 Usage:
   python 4_plot_hpo_snoRNA_heatmap.py \
@@ -20,7 +20,7 @@ Usage:
 Dependencies:
   python3 -m pip install pandas seaborn matplotlib
 
-The script counts unique participants per (HPO term, snoRNA) pair, selects the top N HPO terms by total participants,
+The script counts unique participants per (HPO term, small-RNA label) pair, selects the top N HPO terms by total participants,
 then plots a clustered or plain heatmap (unspecified clustering).
 """
 
@@ -34,13 +34,27 @@ import matplotlib.pyplot as plt
 
 def load_and_prepare(merged_path, hpo_sep=','):
     df = pd.read_csv(merged_path, sep='\t', dtype=str)
-    required = {'snoRNA', 'ParticipantId', 'hpo_terms'}
+    required = {'ParticipantId', 'hpo_terms'}
     if not required.issubset(set(df.columns)):
         raise ValueError(f"Merged file must contain columns: {required}. Found: {set(df.columns)}")
+    if 'rna_gene' not in df.columns and 'snoRNA' not in df.columns:
+        raise ValueError(f"Merged file must contain rna_gene or snoRNA column. Found: {set(df.columns)}")
 
-    # Expand hpo_terms (comma-separated) into one row per term
-    df = df[['snoRNA', 'ParticipantId', 'hpo_terms']].copy()
-    # Replace NaN with empty
+    has_class = 'rna_class' in df.columns
+    df = df.copy()
+    if 'rna_gene' in df.columns:
+        df['rna_gene'] = df['rna_gene'].fillna('')
+        if 'snoRNA' in df.columns:
+            df['rna_gene'] = df['rna_gene'].where(df['rna_gene'].str.strip() != '', df['snoRNA'].fillna(''))
+    else:
+        df['rna_gene'] = df['snoRNA'].fillna('')
+    if has_class:
+        df['rna_class'] = df['rna_class'].fillna('snoRNA')
+        df['rna_label'] = df['rna_class'] + ':' + df['rna_gene']
+    else:
+        df['rna_label'] = df['rna_gene']
+
+    df = df[['rna_label', 'ParticipantId', 'hpo_terms']].copy()
     df['hpo_terms'] = df['hpo_terms'].fillna('')
 
     # Split and explode
@@ -51,15 +65,15 @@ def load_and_prepare(merged_path, hpo_sep=','):
     df['hpo_term'] = df['hpo_list'].astype(str).str.strip()
     df = df[df['hpo_term'] != '']
 
-    # Drop duplicates of same participant-snoRNA-term (ensures unique participants)
-    df = df.drop_duplicates(subset=['ParticipantId', 'snoRNA', 'hpo_term'])
+    # Drop duplicates of same participant-RNA-term (ensures unique participants)
+    df = df.drop_duplicates(subset=['ParticipantId', 'rna_label', 'hpo_term'])
     return df
 
 
 def build_matrix(df):
-    # Count unique participants per (hpo_term, snoRNA)
-    counts = df.groupby(['hpo_term', 'snoRNA'])['ParticipantId'].nunique().reset_index()
-    matrix = counts.pivot(index='hpo_term', columns='snoRNA', values='ParticipantId').fillna(0).astype(int)
+    # Count unique participants per (hpo_term, small-RNA label)
+    counts = df.groupby(['hpo_term', 'rna_label'])['ParticipantId'].nunique().reset_index()
+    matrix = counts.pivot(index='hpo_term', columns='rna_label', values='ParticipantId').fillna(0).astype(int)
     return matrix
 
 
@@ -75,7 +89,7 @@ def plot_heatmap(matrix, out_png, figsize=None, cmap='viridis'):
     plt.figure(figsize=figsize)
     sns.set(style='white')
     ax = sns.heatmap(matrix, cmap=cmap, linewidths=0.5, linecolor='gray')
-    plt.xlabel('snoRNA')
+    plt.xlabel('small RNA')
     plt.ylabel('HPO term')
     plt.tight_layout()
     plt.savefig(out_png, dpi=200)
@@ -83,8 +97,8 @@ def plot_heatmap(matrix, out_png, figsize=None, cmap='viridis'):
 
 
 def main():
-    p = argparse.ArgumentParser(description='Plot HPO x snoRNA heatmap of unique participants')
-    p.add_argument('--merged', required=True, help='Merged TSV with snoRNA, ParticipantId, hpo_terms')
+    p = argparse.ArgumentParser(description='Plot HPO x small-RNA heatmap of unique participants')
+    p.add_argument('--merged', required=True, help='Merged TSV with rna_gene/snoRNA, ParticipantId, hpo_terms')
     p.add_argument('--out-heatmap', required=True, help='Output PNG path for heatmap')
     p.add_argument('--out-matrix', required=False, help='Optional TSV output of the matrix')
     p.add_argument('--top', type=int, default=20, help='Number of top HPO terms to display (default 20)')
